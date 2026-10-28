@@ -102,10 +102,10 @@ function setVerdict(id, name, value, div) {
 }
 
 // Umgebung
-const chrome = (navigator.userAgentData?.brands || []).map(b => b.brand + ' ' + b.version).join(', ');
+const brands = (navigator.userAgentData?.brands || []).map(b => b.brand + ' ' + b.version).join(', ');
 $('env').textContent = [
   'Modus: ' + displayMode(),
-  'Brands: ' + (chrome || '-'),
+  'Brands: ' + (brands || '-'),
   'UA: ' + navigator.userAgent,
   'Bildschirm: ' + screen.width + 'x' + screen.height + ' @' + devicePixelRatio
 ].join('\n');
