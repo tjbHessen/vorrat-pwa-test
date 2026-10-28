@@ -24,6 +24,14 @@
 <p class="banner">PROTOTYP zum Wegwerfen, nur für den Praxistest.</p>
 <h1>Vorrat PWA-Test</h1>
 <pre id="env"></pre>
+<pre id="diag"></pre>
+<script>
+// Diagnose in alter Syntax: läuft auch, wenn der Hauptteil auf altem Chrome nicht startet
+document.getElementById('env').textContent = 'UA: ' + navigator.userAgent;
+window.onerror = function (msg, src, line) {
+  document.getElementById('diag').textContent += 'Fehler: ' + msg + ' (Zeile ' + line + ')\n';
+};
+</script>
 
 <section id="t-scan">
   <h2>1. EAN-13-Scan + Open Food Facts</h2>
