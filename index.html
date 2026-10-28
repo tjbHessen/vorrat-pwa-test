@@ -1,0 +1,212 @@
+<!doctype html>
+<!-- PROTOTYP zum Wegwerfen: PWA-Praxistest für https://github.com/tjbHessen/vorrat/issues/8 -->
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vorrat PWA-Test</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1e5a8c">
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0 auto; padding: 12px 16px 48px; max-width: 640px; background: #fff; color: #111; }
+  h1 { font-size: 1.2rem; } h2 { font-size: 1.05rem; margin: 0 0 8px; }
+  section { border: 1px solid #ccc; border-radius: 8px; padding: 12px; margin: 12px 0; }
+  button { font-size: 1rem; padding: 10px 14px; margin: 4px 4px 4px 0; }
+  input[type=text] { width: 100%; box-sizing: border-box; font-size: 1rem; padding: 8px; margin: 4px 0; }
+  video, img { max-width: 100%; display: block; margin-top: 8px; }
+  .verdict button.ok { background: #cfc; } .verdict button.nok { background: #fcc; }
+  .status { font-weight: bold; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #f4f4f4; padding: 8px; font-size: .85rem; }
+  .banner { background: #ffe9a8; padding: 8px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<p class="banner">PROTOTYP zum Wegwerfen, nur für den Praxistest.</p>
+<h1>Vorrat PWA-Test</h1>
+<pre id="env"></pre>
+
+<section id="t-scan">
+  <h2>1. EAN-13-Scan + Open Food Facts</h2>
+  <button id="scanStart">Kamera starten</button>
+  <button id="scanStop">Stopp</button>
+  <video id="video" playsinline muted hidden></video>
+  <p>Oder Code von Hand: <input type="text" id="manualCode" inputmode="numeric" placeholder="EAN-13"> <button id="manualLookup">Abfragen</button></p>
+  <div id="product"></div>
+</section>
+
+<section id="t-login">
+  <h2>2. Google-Login über Supabase</h2>
+  <input type="text" id="sbUrl" placeholder="Supabase URL (https://xyz.supabase.co)">
+  <input type="text" id="sbKey" placeholder="Supabase anon key">
+  <button id="sbSave">Speichern</button>
+  <button id="login">Mit Google anmelden</button>
+  <button id="logout">Abmelden</button>
+  <p class="status" id="session">Keine Sitzung</p>
+</section>
+
+<section id="t-formats">
+  <h2>3. Unterstützte Barcode-Formate</h2>
+  <p class="status" id="formats"></p>
+</section>
+
+<section id="t-photo">
+  <h2>4. Foto aufnehmen und verkleinern</h2>
+  <input type="file" id="photo" accept="image/*" capture="environment">
+  <p id="photoInfo"></p>
+  <img id="photoPreview" alt="">
+</section>
+
+<section>
+  <h2>Bericht</h2>
+  <button id="copy">Bericht kopieren</button>
+  <pre id="log"></pre>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const verdicts = {};
+const logLines = [];
+
+function log(text) {
+  logLines.push(new Date().toLocaleTimeString('de-DE') + ' ' + text);
+  $('log').textContent = logLines.join('\n');
+}
+
+function displayMode() {
+  return matchMedia('(display-mode: standalone)').matches ? 'installiert (standalone)' : 'Browser-Tab';
+}
+
+// Je Testpunkt ein Urteil: funktioniert / funktioniert nicht
+const tests = { 't-scan': 'Scan + OFF', 't-login': 'Login', 't-formats': 'Formate', 't-photo': 'Foto' };
+for (const [id, name] of Object.entries(tests)) {
+  const div = document.createElement('div');
+  div.className = 'verdict';
+  div.innerHTML = '<button class="ok">funktioniert</button><button class="nok">funktioniert nicht</button> <span></span>';
+  div.querySelector('.ok').onclick = () => setVerdict(id, name, 'funktioniert', div);
+  div.querySelector('.nok').onclick = () => setVerdict(id, name, 'funktioniert nicht', div);
+  $(id).appendChild(div);
+}
+function setVerdict(id, name, value, div) {
+  verdicts[name] = value;
+  div.querySelector('span').textContent = '→ ' + value;
+  log('Urteil ' + name + ': ' + value);
+}
+
+// Umgebung
+const chrome = (navigator.userAgentData?.brands || []).map(b => b.brand + ' ' + b.version).join(', ');
+$('env').textContent = [
+  'Modus: ' + displayMode(),
+  'Brands: ' + (chrome || '-'),
+  'UA: ' + navigator.userAgent,
+  'Bildschirm: ' + screen.width + 'x' + screen.height + ' @' + devicePixelRatio
+].join('\n');
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+
+// 3. Formate
+(async () => {
+  if (!('BarcodeDetector' in window)) { $('formats').textContent = 'BarcodeDetector fehlt'; log('BarcodeDetector fehlt'); return; }
+  const f = await BarcodeDetector.getSupportedFormats();
+  $('formats').textContent = f.join(', ') || '(leer)';
+  log('getSupportedFormats: ' + (f.join(', ') || '(leer)') + ' | ean_13: ' + f.includes('ean_13'));
+})();
+
+// 1. Scan
+let stream = null, scanTimer = null;
+$('scanStart').onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  } catch (e) { log('Kamera-Fehler: ' + e.name + ' ' + e.message); return; }
+  const video = $('video');
+  video.srcObject = stream; video.hidden = false; await video.play();
+  const detector = new BarcodeDetector({ formats: ['ean_13'] });
+  const started = performance.now();
+  log('Scan gestartet');
+  scanTimer = setInterval(async () => {
+    const codes = await detector.detect(video).catch(e => { log('detect-Fehler: ' + e.message); return []; });
+    if (codes.length) {
+      const ms = Math.round(performance.now() - started);
+      stopScan();
+      log('Erkannt: ' + codes[0].rawValue + ' nach ' + ms + ' ms');
+      lookup(codes[0].rawValue);
+    }
+  }, 250);
+};
+function stopScan() {
+  clearInterval(scanTimer);
+  stream?.getTracks().forEach(t => t.stop());
+  $('video').hidden = true;
+}
+$('scanStop').onclick = () => { stopScan(); log('Scan gestoppt'); };
+$('manualLookup').onclick = () => lookup($('manualCode').value.trim());
+
+async function lookup(code) {
+  const url = 'https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json?fields=product_name,brands,quantity,image_front_small_url';
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.status !== 1) { $('product').textContent = code + ': nicht in Open Food Facts'; log('OFF ' + code + ': nicht gefunden'); return; }
+    const p = data.product;
+    $('product').innerHTML = '';
+    const text = document.createElement('p');
+    text.textContent = code + ': ' + [p.brands, p.product_name, p.quantity].filter(Boolean).join(' · ');
+    $('product').appendChild(text);
+    if (p.image_front_small_url) { const img = new Image(); img.src = p.image_front_small_url; $('product').appendChild(img); }
+    log('OFF ' + code + ': ' + text.textContent);
+  } catch (e) { log('OFF-Fehler: ' + e.message); }
+}
+
+// 2. Login über Supabase. URL und anon key liegen nur im Browser, nicht im Repo.
+$('sbUrl').value = localStorage.getItem('sbUrl') || '';
+$('sbKey').value = localStorage.getItem('sbKey') || '';
+$('sbSave').onclick = () => {
+  localStorage.setItem('sbUrl', $('sbUrl').value.trim());
+  localStorage.setItem('sbKey', $('sbKey').value.trim());
+  location.reload();
+};
+let sb = null;
+if (localStorage.getItem('sbUrl') && localStorage.getItem('sbKey')) {
+  sb = supabase.createClient(localStorage.getItem('sbUrl'), localStorage.getItem('sbKey'));
+  sb.auth.onAuthStateChange((event, session) => {
+    const who = session ? session.user.email : 'keine Sitzung';
+    $('session').textContent = who + ' (' + displayMode() + ')';
+    log('Auth ' + event + ': ' + who + ' im Modus ' + displayMode());
+  });
+}
+$('login').onclick = async () => {
+  if (!sb) { log('Erst Supabase URL und Key speichern'); return; }
+  log('Login gestartet im Modus ' + displayMode());
+  const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } });
+  if (error) log('Login-Fehler: ' + error.message);
+};
+$('logout').onclick = async () => { await sb?.auth.signOut(); };
+
+// 4. Foto: lange Kante auf Displayauflösung verkleinern
+$('photo').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const bmp = await createImageBitmap(file);
+  const target = Math.round(Math.max(screen.width, screen.height) * devicePixelRatio);
+  const scale = Math.min(1, target / Math.max(bmp.width, bmp.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bmp.width * scale);
+  canvas.height = Math.round(bmp.height * scale);
+  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise(r => canvas.toBlob(r, 'image/webp', 0.8));
+  $('photoPreview').src = URL.createObjectURL(blob);
+  const info = bmp.width + 'x' + bmp.height + ', ' + Math.round(file.size / 1024) + ' KB → ' +
+    canvas.width + 'x' + canvas.height + ', ' + Math.round(blob.size / 1024) + ' KB (' + blob.type + ')';
+  $('photoInfo').textContent = info;
+  log('Foto: ' + info);
+};
+
+$('copy').onclick = async () => {
+  const report = [$('env').textContent, '', 'Urteile:',
+    ...Object.entries(tests).map(([, n]) => '- ' + n + ': ' + (verdicts[n] || 'offen')), '', 'Log:', ...logLines].join('\n');
+  await navigator.clipboard.writeText(report);
+  log('Bericht kopiert');
+};
+</script>
+</body>
+</html>
